@@ -3,6 +3,14 @@
 - https://www.youtube.com/watch?v=MwbmKqdDsyI&list=PLS6F722u-R6IJfBrIRx3a2SBkAL4vUp2p&index=2
 - https://github.com/cjavdev/creators.dev
 
+### DIFFERENCE BETWEEN RESOURCE AND RESOURCES
+- https://www.rubyinrails.com/2019/04/16/rails-routes-difference-between-resource-and-resources/
+- basically resource is for singular, has all the CRUD except index because index is usually to list the plural, or all the data of that resource
+```
+books, resources; plural, index list of books
+profile, resource; singular, show page of the user profile; or a checkout page; or a single store page etc
+```
+
 ## New Ruby on Rails application and Static pages - CreatorPlatform.xyz - Part 2
 - rails new creators -c tailwind -j esbuild -d postgresql -T --main
 - tailwind didnt install for me with this so i
@@ -500,8 +508,95 @@ post '/webhooks/:source', to: 'webhooks#create'
 ```
 
 - rails g job HandleEvent
+- this is the final file
 
 ```
+class HandleEventJob < ApplicationJob
+  queue_as :default
+
+  def perform(event)
+    case event.source
+    when 'stripe'
+      handle_stripe_event(event)
+    end
+  end
+
+  def handle_stripe_event(event)
+    stripe_event = Stripe::Event.construct_from(event.data)
+    case stripe_event.type
+    when 'account.updated'
+      handle_account_updated(stripe_event)
+    when 'capability.updated'
+      handle_capability_updated(stripe_event)
+    when 'customer.created'
+      handle_customer_created(stripe_event)
+    when 'checkout.session.completed'
+      handle_checkout_session_completed(stripe_event)
+    when 'checkout.session.async_payment_succeeded'
+      handle_checkout_session_completed(stripe_event)
+    when 'treasury.financial_account.features_status_updated'
+      handle_financial_account_features_status_updated(stripe_event)
+    end
+  end
+
+  def handle_checkout_session_completed(stripe_event)
+    session = Stripe::Checkout::Session.retrieve({
+      id: stripe_event.data.object.id,
+      expand: ['line_items'],
+    }, {
+      stripe_account: stripe_event.account,
+    })
+
+    return if session.payment_status != 'paid'
+
+    product = Product.find_by(stripe_id: session.line_items.data[0].price.product)
+    customer = Customer.find_or_initialize_by(
+      stripe_id: session.customer,
+      store: product.store
+    )
+    customer.email = session.customer_details.email
+    customer.save!
+
+    customer_product = CustomerProduct.create!(
+      customer: customer,
+      product: product,
+      checkout_session_id: session.id,
+    )
+    OrderMailer.new_order(customer_product).deliver_later
+  end
+
+  def handle_financial_account_features_status_updated(stripe_event)
+    financial_account = stripe_event.data.object
+    if financial_account.active_features.include?('financial_addresses.aba')
+      account = Account.find_by(stripe_id: stripe_event.account)
+      service = StripeAccount.new(account)
+      service.ensure_external_account
+    end
+  end
+
+  def handle_capability_updated(stripe_event)
+    capability = stripe_event.data.object
+    if capability.id == 'treasury' && capability.status == 'active'
+      # Create a financial account for the connected account
+      account = Account.find_by(stripe_id: capability.account)
+      service = StripeAccount.new(account)
+      service.ensure_financial_account
+    end
+  end
+
+  def handle_account_updated(stripe_event)
+    stripe_account = stripe_event.data.object
+    account = Account.find_by(stripe_id: stripe_account.id)
+    account.update(
+      charges_enabled: stripe_account.charges_enabled,
+      payouts_enabled: stripe_account.payouts_enabled,
+    )
+  end
+
+  def handle_customer_created(stripe_event)
+    puts "customer.created #{stripe_event.data.object.id}"
+  end
+end
 
 ```
 
@@ -520,7 +615,7 @@ worker: bundle exec sidekiq
 
 - HE DID A BUNCH MORE STUFF, I THINK IM GOING TO USE PAY GEM FOR WEBHOOKS TO AVOID ALL THIS
 
-### From: go rails - Stripe Checkout in Rails with the Pay gem
+## From: go rails - Stripe Checkout in Rails with the Pay gem
 - https://www.youtube.com/watch?v=MKWq_soCzsQ
 
 ```
@@ -545,7 +640,7 @@ class ApplicationController < ActionController::Base
   def configure_permitted_parameters
     devise_parameter_sanitizer.permit(:sign_up, keys: [:first_name, :last_name])
     devise_parameter_sanitizer.permit(:account_update, keys: [:first_name, :last_name])
-  end	
+  end 
 end
 ```
 
@@ -597,6 +692,12 @@ class User < ApplicationRecord
 end
 ```
 
+- doing it his way, without the pay gem
+```
+create the file initializers/stripe.rb
+# Stripe.api_key = Rails.application.credentials.stripe[:secret]
+Stripe.api_key = Rails.application.credentials[:development][:stripe][:private_key]
+```
 - in a terminal window, we need the secret
 ```
 stripe listen --forward-to localhost:3000/pay/webhooks/stripe
@@ -646,6 +747,7 @@ worker: bundle exec sidekiq
 
 - ITS WORKING SO FAR
 - testing if webhooks through pay is working
+- start the server, open another terimoan and run the stripe listen, on a 3rd terminal: do the following curl
 - in terminal:  curl -X POST localhost:3000/pay/webhooks/curl -d '{"data":"data"}'
 - got some data, not sure if its correct, lets keep going
 - his webhooks is routed to: post '/webhooks/:source', to: 'webhooks#create'
@@ -1391,7 +1493,7 @@ Accounts
 ```
 
 - refresh and test the root, dashboard and accounts link and everything should be working, even with the menu items active class
-- IT WORKED
+- IT WORKED - no accounts yet
 
 ## Stripe Connect onboarding with Ruby on Rails - CreatorPlatform.xyz - Part 8
 
@@ -1417,6 +1519,11 @@ end
 
 - rails g model Account stripe_id payouts_enabled:boolean charges_enabled:boolean user:references
 - rails db:migrate
+- update user.rb
+
+```
+rails db:migrate
+```
 - create the folder app/stripe (we are going to keep all the stripe actions in this folder with classes)
 - create the file stripe/stripe_account.rb (blank at the moment)
 - update account controller
@@ -1438,7 +1545,7 @@ end
 
 ```
 class StripeAccount
-	attr_reader :account
+  attr_reader :account
 
   def initialize(account)
     @account = account
@@ -1473,7 +1580,7 @@ class StripeAccount
       type: 'account_onboarding',
       collect: 'eventually_due',
     }).url
-  end  	
+  end   
 end
 ```
 
@@ -1707,10 +1814,11 @@ class DashboardsController < ApplicationController
   before_action :authenticate_user!
 
   def show
-    # if !current_user.account.nil?
-    if current_user.account.stripe_id?
-      @financial_balances = StripeAccount.new(current_user.account).financial_balances
-      @payments_balances = StripeAccount.new(current_user.account).payments_balances
+    if !current_user.account.nil?
+      if current_user.account.stripe_id?
+        @financial_balances = StripeAccount.new(current_user.account).financial_balances
+        @payments_balances = StripeAccount.new(current_user.account).payments_balances
+      end
     end
   end
 end
@@ -1755,7 +1863,7 @@ resources :payouts, only: [:create]
 
 ## Enable creators to create Stripe Products with localized prices - CreatorPlatform.xyz - Part 14
 
-- rails g model Product stripe_id stripe_price_id data:json name description
+- rails g model Product stripe_id stripe_price_id data:json name description:text
 - update the migration
 ```
 t.string :name, null: false
@@ -1940,6 +2048,11 @@ end
    checkout_session = Stripe::Checkout::Session.create({
       customer_email: "test+location_FR@example.com",
 ```
+- update user.rb
+
+```
+has_many :products     
+```
 
 - added a price method to product.rb to work with the index page
 
@@ -1991,12 +2104,6 @@ end
 
 ```
 has_one_attached :photo
-
-//he did this but neither vips nor imagemagick is wokring on my machine so no variants
-  # has_one_attached :photo do |photo|
-  #   photo.variant :thumb, resize_to_limit: [100, 100]
-  #   photo.variant :medium, resize_to_limit: [400, 400]
-  # end
 ```
 
 - udate products controller
@@ -2006,8 +2113,1674 @@ params.require(:product).permit(:name, :description, :photo)
 ```
 
 - add the image input to products/new
-- restart the gem
-- 
+- restart the server
+- add new product with image
+- to get the photo working, i had to change the form to rails form
+
+```
+product/new
+<%= render 'form', product: @product %>
+
+product/form
+<%= form_with(model: product, class: "space-y-8 divide-y divide-gray-200",data: {turbo: false}) do |form| %>
+  <div class="space-y-8 divide-y divide-gray-200">
+    <div>      
+      <% if product.errors.any? %>
+        <div style="color: red">
+          <h2><%= pluralize(product.errors.count, "error") %> prohibited this product from being saved:</h2>
+
+          <ul>
+            <% product.errors.each do |error| %>
+              <li><%= error.full_message %></li>
+            <% end %>
+          </ul>
+        </div>
+      <% end %>
+      <div>
+        <h3 class="text-lg leading-6 font-medium text-gray-900">Product</h3>
+        <p class="mt-1 text-sm text-gray-500"></p>
+      </div>
+      <div class="mt-6 grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">
+        <div class="sm:col-span-4">
+          <%= form.label :name, class: "block text-sm font-medium text-gray-700" %>
+          <div class="mt-1">
+            <%= form.text_field :name, class: "flex-1 focus:ring-blue-500 focus:border-blue-500 block w-full min-w-0 rounded-md sm:text-sm border-gray-300" %>
+          </div>
+        </div>
+        <div class="sm:col-span-6">
+          <%= form.label :description, class: "block text-sm font-medium text-gray-700" %>
+          <div class="mt-1">
+            <%= form.text_area :description, row: 3, class: "shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border border-gray-300 rounded-md" %>
+          </div>
+          <p class="mt-2 text-sm text-gray-500">Write a few sentences to describe the product.</p>
+        </div>
+        <div class="sm:col-span-6">
+          <%= form.label :photo, class: "block text-sm font-medium text-gray-700" %>
+          <div class="mt-1">
+            <%= form.file_field :photo, direct_upload: true, class: "bg-white py-2 px-3 border border-gray-300 rounded-md shadow-sm text-sm leading-4 font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500" %>
+          </div>
+        </div>
+      </div>
+    </div>    
+
+    <div class="pt-8">
+      <div>
+        <h3 class="text-lg leading-6 font-medium text-gray-900">Default Price</h3>
+        <p class="mt-1 text-sm text-gray-500">Set a default price.</p>
+      </div>
+      <div class="mt-6 grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">
+        <div class="sm:col-span-3">
+          <!-- <label for="currency" class="block text-sm font-medium text-gray-700">Currency</label> -->
+          <%= form.label :currency, class: "block text-sm font-medium text-gray-700" %>
+          <div class="mt-1">
+            <!-- <input type="text" value="usd" name="default_price_data[currency]" id="currency" class="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"> -->
+            <%= form.text_field :currency, 
+              value: "usd", 
+              id: "currency", 
+              name: "default_price_data[currency]",
+              class: "shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md" %>
+          </div>
+        </div>
+
+        <div class="sm:col-span-3">
+          <!-- <label for="amount" class="block text-sm font-medium text-gray-700">Amount</label> -->
+          <%= form.label :amount, class: "block text-sm font-medium text-gray-700" %>
+          <div class="mt-1">
+            <!-- <input type="number" step="0.01" name="default_price_data[amount]" id="amount" class="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"> -->
+            <%= form.number_field :amount, 
+              id: "amount",
+              step: 0.01,
+              name: "default_price_data[amount]",
+              class: "shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"  %>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div data-controller="product-form" class="pt-8">
+      <div>
+        <h3 class="text-lg leading-6 font-medium text-gray-900">Alternative Prices</h3>
+        <p class="mt-1 text-sm text-gray-500">
+          Select from the list of supported currencies
+          <a href="https://stripe.com/docs/currencies#presentment-currencies"
+             class="underline"
+            target="_blank">stripe.com/docs/currencies</a>
+        </p>
+      </div>
+
+      <button data-action="product-form#addPrice" type="button" class="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Add price</button>
+
+      <div data-product-form-target="prices"></div>
+
+      <template data-product-form-target="template">
+        <div class="mt-6 grid grid-cols-1 gap-y-6 gap-x-4 sm:grid-cols-6">
+          <div class="sm:col-span-3">
+            <!-- <label for="currency" class="block text-sm font-medium text-gray-700">Currency</label> -->
+            <%= form.label :currency, class: "block text-sm font-medium text-gray-700" %>
+            <div class="mt-1">
+              <!-- <input type="text" name="currency_options[][currency]" id="currency" class="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"> -->
+              <%= form.text_field :currency, 
+                id: "currency",
+                name: "currency_options[][currency]",
+                class: "shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"%>
+            </div>
+          </div>
+
+          <div class="sm:col-span-3">
+            <!-- <label for="amount" class="block text-sm font-medium text-gray-700">Amount</label> -->
+            <%= form.label :amount, class: "block text-sm font-medium text-gray-700" %>
+            <div class="mt-1">
+              <!-- <input type="number" step="0.01" name="currency_options[][amount]" id="amount" class="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"> -->
+              <%= form.number_field :amount,
+              id: "amount",
+              step: 0.01,
+              name: "currency_options[][amount]",
+              class: "shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md" %>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+  </div>
+
+  <div class="pt-5">
+    <div class="flex justify-end">
+      <%= form.submit 'Create Product', class: "ml-3 inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500" %>
+    </div>
+  </div>
+<% end %>
+
+```
+
+- product.rb
+
+```
+class Product < ApplicationRecord
+  belongs_to :user
+  has_one_attached :photo
+  has_one_attached :photo
+  # has_one_attached :photo do |photo|
+  #   photo.variant :thumb, resize_to_limit: [100, 100]
+  #   photo.variant :medium, resize_to_limit: [400, 400]
+  # end
+
+  def price
+    product_data&.default_price&.unit_amount&.fdiv(100.0)
+  end
+  def product_data
+    return if data.blank?
+    Stripe::Product.construct_from(JSON.parse(data))
+  end   
+end
+
+```
+
+- products controller
+
+```
+class ProductsController < ApplicationController
+  include ActiveStorage::SetCurrent 
+  before_action :authenticate_user!
+  def index
+    @products = current_user.products.order(created_at: :desc)
+  end
+
+  def show
+    @product = Product.find(params[:id])
+  end
 
 
-=> #<ActionController::Parameters {"name"=>"Amsterdam", "description"=>"The climate of hate", "photo"=>"Amsterdam.jpg"} permitted: true>
+  def new
+    # @product = Product.new
+    @product = current_user.products.new
+  end
+
+  def edit
+  end
+
+  def create
+    @product = current_user.products.new(product_params)
+    if @product.save
+      service = StripeProduct.new(params, @product)
+      service.create_product
+      redirect_to @product
+    else
+      render :new
+    end
+  end
+
+  private
+
+  def product_params
+    params.require(:product).permit(:name, :description, :photo)
+  end    
+end
+
+```
+
+- stripe/stripe_product.rb
+
+```
+class StripeProduct
+  attr_reader :params, :product
+
+  def initialize(params, product)
+    @params = params
+    @product = product
+  end
+
+  def currency_options
+    params
+      .fetch(:currency_options, [])
+      .inject({}) do |acc, option|
+        acc[option[:currency]] = {unit_amount: (option[:amount].to_f * 100).to_i}
+        acc
+      end
+  end
+
+  def create_product
+    return if product.stripe_id.present?
+
+    stripe_product = Stripe::Product.create({
+      name: product.name,
+      description: product.description,
+      images: [
+        # product.photo.representation(:medium).processed.url,
+        # "https://doodleipsum.com/700/flat?i=191258f28a3672a5589de78d98ac7967",
+        # Rails.application.routes.url_helpers.rails_blob_path(product.photo, only_path: true),
+        # url_for(product.photo),
+        # the .url is beacuse the direct upload true
+        product.photo.url
+      ],
+      metadata: {
+        user_id: product.user_id,
+        product_id: product.id
+      },
+      default_price_data: {
+        currency: params[:default_price_data][:currency],
+        unit_amount: (params[:default_price_data][:amount].to_f * 100).to_i,
+        currency_options: currency_options
+      },
+      expand: ['default_price'],
+    },)
+
+    product.update(
+      stripe_id: stripe_product.id,
+      data: stripe_product.to_json,
+      stripe_price_id: stripe_product.default_price.id,
+    )
+  end
+end
+
+```
+
+- update products/show
+
+```
+<%= content_for :page_title do %>
+<%= @product.name %>
+<% end %>
+
+  <div>
+    <%= image_tag @product.photo %>
+  </div>
+    <div>
+      <form action="/checkout" method="post" data-turbo="false">
+        <input type="hidden" name="authenticity_token" value="<%= form_authenticity_token %>">
+        <input type="hidden" name="product_id" value="<%= @product.id %>">
+        <button type="submit" style="background-color: blue" class="w-full mt-4 items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+          Buy
+        </button>
+      </form>
+    </div>
+```
+
+## AWS S3 Uploads with Ruby on Rails - CreatorPlatform.xyz - Part 16
+- bundle add aws-sdk-s3
+- go to console home
+- s3
+- create a bucket
+- name: <name>-development, region: us-east-1
+- keep everything disabled
+- click 'create bucket' at the bottom
+- click 'services' up top right 
+- choose IAM
+- click on users
+- add user
+- name: <name>
+- click: access key
+- click: next permissions
+- attach existing policies
+- filter policies: s3 - full access
+- click: next tags
+- no new tags, click: next review
+- click: create user
+- copy keys
+
+- EDITOR="subl --wait" rails credentials:edit
+```
+development:
+  stripe:
+  ....
+  ...
+
+  aws:
+    access_key_id: '123'
+    secret_access_key: '345'
+```
+
+- update storage.yml
+```
+amazon:
+  service: S3
+  access_key_id: <%= Rails.application.credentials.dig(:development, :aws, :access_key_id) %>
+  secret_access_key: <%= Rails.application.credentials.dig(:development, :aws, :secret_access_key) %>
+  region: us-east-1
+  bucket: creators-dev
+  # bucket: your_own_bucket-<%= Rails.env %>
+
+```
+
+- update env/dev
+
+```
+  config.active_storage.service = :amazon
+  # config.active_storage.service = :local
+```
+
+- restart server
+- and create new product
+- didnt work, in his video he said CORS
+- im gonna try: https://edgeguides.rubyonrails.org/active_storage_overview.html
+- go to aws/s3/ to the bucket
+- click permissions
+- go down to cors section
+- paste the code from above
+- update allow origins
+
+```
+  "AllowedOrigins": [
+      "*"
+```
+
+- he did a ngrok server and used that and stripe was able to see it,
+- we'll have to wait
+- OTHER THAN THAT, IT WORKED
+- FOR PRODUCTION
+- in production.rb: storage to amazon; create a new bucket creators-production
+
+## Stores Subdomain Routing with Ruby on Rails - CreatorPlatform.xyz - Part 17
+- rails g model Store subdomain domain primary_color secondary_color user:references 
+- rails db:migrate
+- update routes
+- add the folder lib/contstraints/domain_contraint.rb
+```
+class DomainConstraint
+  def self.matches?(request)
+    Store
+      .where(domain: request.domain)
+      .or(Store.where(subdomain: request.subdomain))
+      .exists?
+  end
+end
+
+```
+
+- update routes
+```
+require 'constraints/domain_constraint'
+Rails.application.routes.draw do
+  devise_for :users
+  root 'static_pages#root'
+  # post '/webhooks/:source', to: 'webhooks#create'  
+
+  constraints DomainConstraint do
+  end  
+  resource :dashboard
+  resources :accounts
+  resources :payouts, only: [:create]
+  resources :products do
+    resources :attachments, shallow: true
+  end
+  resource :checkout
+end
+
+```
+
+- rails g controller Stores/Products
+- update routes
+
+```
+  constraints DomainConstraint do
+    scope module: :stores do
+      resources :products
+    end    
+  end  
+```
+
+- update stores/products controller
+
+```
+module Stores
+  class ProductsController < StoreBaseController
+    def index
+      @products = @store.products
+    end
+
+    def show
+      @product = @store.products.find(params[:id])
+    end
+  end
+end
+
+```
+
+- update lib/constraints/domain_constraint
+```
+class DomainConstraint
+  def self.matches?(request)
+    !Store.find_by_request(request).nil?
+  end
+end
+```
+
+- update store.rb
+
+```
+
+  def self.find_by_request(request)
+    puts "Finding by request"
+
+    where(domain: request.domain)
+      .or(where(subdomain: request.subdomain))
+      .first
+  end
+```
+
+- create the file controllers/store/store_base_controller
+
+```
+module Stores
+  class StoreBaseController < ApplicationController
+    before_action :set_store
+
+    def set_store
+      @store ||= Store.find_by_request(request)
+    end
+
+  end
+end
+
+```
+
+- update user.rb
+```
+has_one :store
+```
+
+- update store.rb
+
+```
+  has_many :products, through: :user
+```
+
+- SETTING UP lvh.me:3000 to work with subdomains
+- in app.rb
+```
+    <!-- i tried this, didnt work -->
+    config.hosts << "lvh.me"
+    <!-- he did this -->
+    config.hosts = nil
+```
+- update procfile.dev
+
+```
+web: bin/rails server -p 3000 -b lvh.me
+```
+
+- in rails c
+```
+Store.count
+u = User.first
+u.create_store!(subdomain: 'test')
+IT WORKED
+```
+
+- go to test.lvh.me:3000/products
+- missing template error
+- create views/stores/products/index.html.erb
+- create a new 'layout'
+- layouts/stores
+- update store_base controller
+
+```
+layout 'stores'
+```
+
+- updating root in routes
+- make sure default root is below this root
+```
+  constraints DomainConstraint do
+    scope module: :stores do
+      resources :products
+      root to: 'products#index', as: 'store_root'
+    end    
+  end  
+  root 'static_pages#root'  
+```
+- go to: test.lvh.me:3000/products
+- IT WORKED
+- rails g controller Stores
+- update stores controller
+```
+class StoresController < ApplicationController
+  before_action :authenticate_user!
+  layout 'application'
+
+  def show
+    @store = current_user.store
+  end
+
+  def edit
+    @store = current_user.store
+  end
+
+  def update
+    @store = current_user.store
+    if @store.update(store_params)
+      service = StripeAccount.new(current_user.account)
+      service.update_account_branding
+      redirect_to store_path
+    else
+      render :edit
+    end
+  end
+
+  private
+
+  def store_params
+    params.require(:store).permit(
+      :domain,
+      :subdomain,
+      :primary_color,
+      :secondary_color
+    )
+  end
+end
+```
+
+- update routes
+
+```
+resource :store
+```
+- update app helper
+
+```
+      name: 'Store',
+      path: store_path,
+```
+- update the views/stores/edit and show files
+- to see json output
+
+```
+<%= @store.to_json %>
+```
+
+- refresh and go to: http://lvh.me:3000/dashboard
+- click the store link
+- we see the store/show
+- click edit and edit name, doesnt save because to account id
+- it has color pickers
+- update account.rb
+
+```
+class Account < ApplicationRecord
+  belongs_to :user
+  has_one :store, through: :user
+end
+```
+
+## Product listing pages with Tailwind UI - CreatorPlatform.xyz - Part 18
+- he just tweaked the stores/product/index
+- in the stores/products/index we use
+
+```
+<!-- if it displayable -->
+      <% if product.photo.representable? %>
+      <%= image_tag product.photo %>
+      <% end %>
+```
+
+## Customer Payment Flow with Stripe Checkout - CreatorPlatform.xyz - Part 19
+- rails g controller Stores/Checkouts
+- update routes
+
+```
+  constraints DomainConstraint do
+    scope module: :stores do
+      resources :products
+      root to: 'products#index', as: 'store_root'
+      resource :checkout, as: 'store_checkout'
+    end    
+  end  
+```
+
+- update stores/checkouts controller
+
+```
+module Stores
+  class CheckoutsController < StoreBaseController
+
+    def show
+      @checkout_session = Stripe::Checkout::Session.retrieve({
+        id: params[:session_id],
+        expand: ['line_items.data.price.product', 'payment_intent.payment_method']
+      }, {
+        stripe_account: @store.user.account.stripe_id
+      })
+    end
+
+    def create
+      checkout_session = Stripe::Checkout::Session.create({
+        mode: 'payment',
+        success_url: store_checkout_url + "?session_id={CHECKOUT_SESSION_ID}",
+        cancel_url: store_root_url,
+        line_items: [{
+          price: params[:price],
+          quantity: 1
+        }]
+      }, {
+        stripe_account: @store.user.account.stripe_id
+      })
+
+      redirect_to checkout_session.url, allow_other_host: true, status: :see_other
+    end
+  end
+end
+```
+
+- create the stores/checkouts/show thank you redirect page
+- refresh and test
+- IT WORKED
+
+## Order Confirmation Page with Tailwind UI - CreatorPlatform.xyz - Part 20
+- creating the stores/checkouts/show now
+- updated the stores/checkouts/controller
+```
+    def show
+      # render plain: 'Thanks'
+      @checkout_session = Stripe::Checkout::Session.retrieve({
+        id: params[:session_id],
+        expand: ['line_items.data.price.product', 'payment_intent.payment_method']
+      }, {
+        stripe_account: @store.user.account.stripe_id
+      })
+    end
+
+```
+
+- the receipe_url isnt working
+
+## Order Fulfillment with Webhooks - CreatorPlatform.xyz - Part 21
+- rails g model Customer stripe_id email store:references 
+- update migration
+```
+class CreateCustomers < ActiveRecord::Migration[7.0]
+  def change
+    create_table :customers do |t|
+      t.string :stripe_id
+      t.string :email, null: false
+      t.references :store, null: false, foreign_key: true
+
+      t.timestamps
+    end
+    add_index :customers, [:store_id, :email], unique: true
+  end
+end
+
+```
+
+- rails db:migrate
+- update customer.rb
+```
+  belongs_to :store
+```
+
+- rails g model CustomerProduct customer:references product:references checkout_session_id 
+- update migration
+```
+class CreateCustomerProducts < ActiveRecord::Migration[7.0]
+  def change
+    create_table :customer_products do |t|
+      t.references :customer, null: false, foreign_key: true
+      t.references :product, null: false, foreign_key: true
+      t.string :checkout_session_id
+
+      t.timestamps
+    end
+    # this is validation in case they purchase again, it has a new session
+    add_index :customer_products, [:customer_id, :product_id, :checkout_session_id], unique: true, name: 'customer_product_session_index'
+  end
+end
+
+```
+
+- update customer.rb
+
+```
+  belongs_to :store
+  has_many :customer_products
+  has_many :products, through: :customer_products
+```
+
+- update product.rb
+
+```
+class Product < ApplicationRecord
+  validates :name, presence: true
+  validates :description, presence: true
+  belongs_to :user
+  has_one :store, through: :user
+  has_many :customer_products
+  has_many :customers, through: :customer_products
+  has_one_attached :photo
+```
+
+- update handle_event_job with the def handle_checkout_session_completed(stripe_event)
+- I commented out 'account' because i dont have the whole treasury thing set up
+```
+    when 'checkout.session.completed'
+      handle_checkout_session_completed(stripe_event)
+    when 'treasury.financial_account.features_status_updated'
+      handle_financial_account_features_status_updated(stripe_event)
+    end
+  end
+
+  def handle_checkout_session_completed(stripe_event)
+    puts "THE STRIPE EVENT IS #{stripe_event.data.object}"
+    session = Stripe::Checkout::Session.retrieve({
+      id: stripe_event.data.object.id,
+      expand: ['line_items'],
+    }, {
+      # stripe_account: stripe_event.account,
+    })
+    puts "THE SESSIONS RETRIEVED IS #{session}"
+
+    return if session.payment_status != 'paid'
+
+    product = Product.find_by(stripe_id: session.line_items.data[0].price.product)
+    customer = Customer.find_or_initialize_by(
+      stripe_id: session.customer,
+      store: product.store
+    )
+    customer.email = session.customer_details.email
+    customer.save!
+    puts "CUSTOMER CREATED #{customer}"
+    customer_product = CustomerProduct.create!(
+      customer: customer,
+      product: product,
+      checkout_session_id: session.id,
+    )
+    puts "CUSTOMER PRODUCT CREATED #{customer_product}"
+  end
+```
+
+- refresh and buy a product
+- IT WORKED
+- go to rails c
+```
+Customer.count
+CustomerProduct.count
+```
+- add the async to the handle event job, this to add ACH in case your product is really expensive and we need to verify that the $2000 transaction has occurred
+
+```
+    when 'checkout.session.completed'
+      handle_checkout_session_completed(stripe_event)
+    when 'checkout.session.async_payment_succeeded'
+      handle_checkout_session_completed(stripe_event)      
+    when 'treasury.financial_account.features_status_updated'
+      handle_financial_account_features_status_updated(stripe_event)
+    end
+  end
+```
+
+- ADDING A VIEW TO SEE THE CUSTOMERS
+- rails g controller Customers index show
+- update routes
+```
+resources :customers
+```
+
+- update customers controlelrs
+
+```
+class CustomersController < ApplicationController
+  before_action :authenticate_user!
+
+  def index
+    @customers = current_user.store.customers.all
+  end
+
+  def show
+    @customer = current_user.store.customers.find(params[:id])
+  end
+end
+
+```
+
+- update the index and show views
+- update app helper
+
+```
+    }, {
+      name: 'Customers',
+      path: customers_path,
+```
+
+- update store.rb
+```
+  has_many :customers, through: :products
+```
+- refresh and go to page
+
+## Modeling Attachments and using Counter Caches - CreatorPlatform.xyz - Part 22
+- ADDING THE ABILITY TO ADD ATTACHMENTS
+- rails g model Attachment product:references name views_count:integer (the views count is to keep track of how many have been downloaded)
+- rails g model AttachmentView attachment:references customer:references
+- rails db:migrate
+- update attachment.rb
+
+```
+class Attachment < ApplicationRecord
+  belongs_to :product
+  has_many :attachment_views, dependent: :destroy
+  has_one_attached :file
+end
+```
+
+- update attachment view
+
+```
+class AttachmentView < ApplicationRecord
+  belongs_to :attachment, counter_cache: :views_count
+  belongs_to :customer
+end
+``` 
+
+- rails g controller Attachments
+- update attachments controller
+
+```
+  before_action :authenticate_user!
+
+  def create
+    product = current_user.products.find(params[:product_id])
+    @attachment = product.attachments.new(attachment_params)
+
+    if !@attachment.save
+      flash[:error] = @attachment.errors.full_messages.join(', ')
+    end
+
+    redirect_to product_path(product)
+  end
+
+  private
+
+  def attachment_params
+    params.require(:attachment).permit(:file, :name)
+  end
+end
+
+```
+
+- update routes
+
+```
+  resources :products do
+    # shallow true is so attachements are nested under products
+    # but attachments themselves are attachements/:id
+    # so theyre not products/:id/attachemtns/:id
+    resources :attachments, shallow: true
+  end
+```
+
+- example
+
+```
+product_attachments_path  GET   /products/:product_id/attachments(.:format)   
+
+attachments#index
+  POST  /products/:product_id/attachments(.:format)   
+
+attachments#create
+new_product_attachment_path   GET   /products/:product_id/attachments/new(.:format)   
+
+attachments#new
+edit_attachment_path  GET   /attachments/:id/edit(.:format)   
+
+attachments#edit
+attachment_path   GET   /attachments/:id(.:format)  
+
+attachments#show
+  PATCH   /attachments/:id(.:format)  
+
+attachments#update
+  PUT   /attachments/:id(.:format)  
+
+attachments#update
+  DELETE  /attachments/:id(.:format)  
+
+attachments#destroy
+```
+- update product.rb
+
+```
+  has_many :customers, through: :customer_products
+  has_many :attachments, dependent: :destroy
+```
+- update the products show with the attachment sections
+- refresh and test it out
+- IT WORKED but the file url wasnt working
+- i added a pdf and an mp3 but the url wasnt there
+- in rails c
+```
+a = Attachment.last.file.url (and it came back nil)
+```
+- i had to add rails form
+- i updated products controller
+
+```
+  def show
+    @product = Product.find(params[:id])
+    # @attachment = @product.attachments.new
+    @attachment = Attachment.new
+  end
+```
+
+- then i updated the form in the products show
+
+```
+    <%= form_for(@attachment, url: product_attachments_path(@product), html: {class: "mt-8"}, data: {turbo: false})  do |f| %>
+      <div>        
+        <%= f.label :name, class:"block text-sm font-medium text-gray-700" %>
+        <div class="mt-1">
+          <%= f.text_field :name, id: "name", class: "shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md" %>        
+        </div>
+      </div>
+      <div>
+        <%= f.label :file, class: "block text-sm font-medium text-gray-700" %>
+        <div class="mt-1">          
+          <%= f.file_field :file, id: 'file', direct_upload: true, class: "bg-white py-2 px-3 border border-gray-300 rounded-md shadow-sm text-sm leading-4 font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500" %>
+        </div>        
+      </div>
+      <div class="mt-4">        
+        <%= f.submit 'Add Attachment', class: "inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"%>
+      </div>
+    <% end %>
+```
+
+## Deploy Rails 7 to Heroku - CreatorPlatform.xyz - Part 23
+- i didnt do it because heroku is not free anymore
+
+## SSL for Custom Subdomains with Cloudflare, Heroku, and Rails - CreatorPlatform.xyz - Part 24
+- got a domain at cloudflare
+- created the ability to add subdomains in cloudflare
+
+## Gravatars - CreatorPlatform.xyz - Part 25
+- added to app helper
+
+```
+  def gravatar_url
+    gravatar_id = Digest::MD5::hexdigest(current_user.email.downcase)
+    "https://secure.gravatar.com/avatar/#{gravatar_id}"
+  end
+
+```
+- add to app.html.erb
+
+```
+<img class="h-8 w-8 rounded-full" src="<%= gravatar_url if current_user %>" alt="">
+```
+
+## Custom layout for devise views - CreatorPlatform.xyz - Part 26
+- create a layouts/devise.html.erb file
+- and it will automatically route all devise routes there
+
+## Custom attributes for devise onboarding - CreatorPlatform.xyz - Part 27
+- add the subdomain field to the new user registration
+- update user.rb
+
+```
+accepts_nested_attributes_for :store
+```
+
+- update app controller
+
+```
+class ApplicationController < ActionController::Base
+  before_action :configure_permitted_parameters, if: :devise_controller?
+
+  protected
+
+  def configure_permitted_parameters
+    devise_parameter_sanitizer.permit(:sign_up, keys: [
+      :first_name, 
+      :last_name,
+      store_attributes: [:subdomain]
+    ])
+    devise_parameter_sanitizer.permit(:account_update, keys: [:first_name, :last_name])
+  end 
+end
+```
+
+- go to incognito window
+- register new account with the subdomain
+- go to dashboard/store and we should see the name
+- IT WORKED
+
+## Branding with DALL-E generated logo - CreatorPlatform.xyz - Part 28
+- he created bradning info from Dall-E
+- he wrote
+
+```
+a logo for a creator platform that enables creators to sell their digital products. It should use at most 2 colors and be very clean and sharp.
+
+then he wrote
+generate a simple logo for a e-commerce platform with a professional clean aesthetic
+
+then he wrote
+generate a simple logo for a e-commerce platform called CreatorPlatform.xyz
+
+then he wrote
+generate a professional logo for a website called CreatorPlatform.xyz
+```
+
+- he went to https://www.remove.bg/, to remove the background
+
+## Stripe Treasury flows explained - CreatorPlatform.xyz - Part 29
+- explained the flow of monies
+
+## Create cardholders and issue cards to creators - CreatorPlatform.xyz - Part 30
+
+- rails g model Cardholder stripe_id name data:json user:references
+- rails g model Card stripe_id cardholder:references data:json last4
+- rails db:migrate
+- update user.rb
+
+```
+  has_one :store
+  has_many :cardholders
+  has_many :cards, through: :cardholders  
+  accepts_nested_attributes_for :store
+end
+
+```
+
+- update card.rb as
+
+```
+class Card < ApplicationRecord
+  belongs_to :cardholder
+end
+
+```
+
+- update cardholder.rb
+
+```
+class Cardholder < ApplicationRecord
+  belongs_to :user
+  has_one :account, through: :user
+  has_many :cards, dependent: :destroy
+end
+```
+
+- rails g controller Cardholders index new
+- update routes
+
+```
+resources :cardholders
+```
+
+- add the cardholders/index, new and show files
+- update app helper
+
+```
+    }, {
+      name: 'Cardholders',
+      path: cardholders_path,
+```
+
+- rails g migration AddEmailToCardholders email
+- rails db:migrate
+- update cardholders controller
+
+```
+params.require(:cardholder).permit(:name, :email)
+```
+
+- create the stripe/stripe_cardholder.rb file
+```
+class StripeCardholder
+  attr_reader :params, :cardholder
+
+  def initialize(params, cardholder)
+    @params = params
+    @cardholder = cardholder
+  end
+
+  def create_cardholder
+    address_parms = params[:cardholder][:billing][:address]
+    stripe_cardholder = Stripe::Issuing::Cardholder.create({
+      type: 'individual',
+      name: cardholder.name,
+      email: cardholder.email,
+      phone_number: '+18888675309',
+      billing: {
+        address: {
+          line1: address_parms[:line1],
+          city: address_parms[:city],
+          state: address_parms[:state],
+          country: address_parms[:country],
+          postal_code: address_parms[:postal_code]
+        },
+      },
+    }, {
+      stripe_account: cardholder.account.stripe_id,
+    })
+    cardholder.update(
+      stripe_id: stripe_cardholder.id,
+      data: stripe_cardholder
+    )
+  end
+end
+```
+
+- refresh and tested it, it writes to database but not to stripe
+- got error
+```
+Your account is not set up to use Issuing. Please visit https://dashboard.stripe.com/issuing/overview to get started.
+```
+
+- setting up the card show
+- update routes
+
+```
+  resources :cardholders do
+    resources :cards, shallow: true do
+      resource :ephemeral_key, only: [:show]
+    end
+  end
+```
+
+- rails g controller Cards new
+- update the cards controller
+```
+class CardsController < ApplicationController
+  before_action :authenticate_user!
+
+  def show
+    @card = current_user.cards.find(params[:id])
+  end
+
+  def create
+    @cardholder = current_user.cardholders.find(params[:cardholder_id])
+    @card = @cardholder.cards.new
+    if @card.save
+      service = StripeCard.new(params, @card)
+      service.create_card
+      redirect_to cardholder_path(@cardholder)
+    else
+      flash[:error] = "Card not created"
+      render :new
+    end
+  end
+end
+
+```
+
+- create the stripe/stripe_card.rb
+```
+class StripeCard
+  attr_reader :card, :params
+
+  def initialize(params, card)
+    @params = params
+    @card = card
+  end
+
+  def create_card
+    # TODO: create physical cards that can be mailed.
+
+    stripe_card = Stripe::Issuing::Card.create({
+      cardholder: card.cardholder.stripe_id,
+      currency: 'usd',
+      type: 'virtual',
+      financial_account: card.cardholder.account.financial_account_id,
+    }, {
+      stripe_account: card.cardholder.account.stripe_id,
+    })
+
+    card.update(
+      stripe_id: stripe_card.id,
+      data: stripe_card,
+      last4: stripe_card.last4,
+    )
+  end
+end
+
+```
+
+- add the cards/show file
+- refresh and test
+- error
+```
+Your account is not set up to use Issuing. Please visit https://dashboard.stripe.com/issuing/overview to get started.
+```
+
+## Display virtual card details with Issuing Elements - CreatorPlatform.xyz - Part 31
+- added card view show
+- adding a stimulus to show the info on the issued card
+- rails g stimulus card
+- update the controllers/card controller
+
+```
+import { Controller } from "@hotwired/stimulus"
+
+// Connects to data-controller="card"
+export default class extends Controller {
+  static values = {
+    stripeKey: String,
+    id: Number,
+    stripeId: String,
+    stripeAccount: String,
+  }
+  static targets = ['number', 'expiry', 'cvc']
+
+  async connect() {
+    // Initialize Stripe
+    console.log(this.stripeKeyValue)
+    this.stripe = Stripe(this.stripeKeyValue, {
+      stripeAccount: this.stripeAccountValue,
+      betas: ['issuing_elements_2'],
+    })
+    this.elements = this.stripe.elements()
+
+    // Fetch an ephemeral key from the server
+    const nonce = await this.createNonce()
+    console.log({nonce})
+    const ephemeralKey = await this.fetchEphemeralKey(nonce)
+    console.log({ephemeralKey})
+
+    // Re retrieve the issued card
+    const cardResult = await this.fetchCard(ephemeralKey, nonce);
+
+    // Mount the issuing elements
+    this.mountElements()
+  }
+
+  mountElements() {
+    const params = {
+      issuingCard: this.stripeIdValue,
+      style: {
+        base: {
+          color: 'white'
+        }
+      }
+    }
+    const number = this.elements.create('issuingCardNumberDisplay', params)
+    number.mount(this.numberTarget)
+
+    const expiry = this.elements.create('issuingCardExpiryDisplay', params)
+    expiry.mount(this.expiryTarget)
+
+    const cvc = this.elements.create('issuingCardCvcDisplay', params)
+    cvc.mount(this.cvcTarget)
+  }
+
+  async createNonce() {
+    const {nonce} = await this.stripe.createEphemeralKeyNonce({
+      issuingCard: this.stripeIdValue
+    })
+    return nonce
+  }
+
+  async fetchEphemeralKey(nonce) {
+    return await fetch(`/cards/${this.idValue}/ephemeral_key?nonce=${nonce}&version=2022-08-01`).then(r => r.json())
+  }
+
+  async fetchCard(ephemeralKey, nonce) {
+    return await this.stripe.retrieveIssuingCard(this.stripeIdValue, {
+      ephemeralKeySecret: ephemeralKey.secret,
+      nonce: nonce,
+    })
+  }
+}
+
+```
+
+- rails g controller EphemeralKeys
+- update the controller
+
+```
+class EphemeralKeysController < ApplicationController
+  before_action :authenticate_user!
+
+  def show
+    @card = current_user.cards.find(params[:card_id])
+    @ephemeral_key = Stripe::EphemeralKey.create({
+      nonce: params[:nonce],
+      issuing_card: @card.stripe_id,
+    }, {
+      stripe_account: current_user.account.stripe_id,
+      stripe_version: params[:version],
+    })
+    render json: @ephemeral_key
+  end
+end
+
+```
+
+- update the routes
+```
+  resources :cardholders do
+    resources :cards, shallow: true do
+      resource :ephemeral_key, only: [:show]
+    end
+  end
+```
+
+- I didnt finish this because i dont have treasury nor issuing cards setup
+
+## Sending email with Ruby on Rails - CreatorPlatform.xyz - Part 32
+- bundle add letter_opener --group development
+- update config/dev/eng
+
+```
+  config.action_mailer.delivery_method = :letter_opener
+  config.action_mailer.perform_deliveries = true
+  config.action_mailer.default_url_options = { host: 'lvh.me', port: 3000 }
+```
+
+- rails g mailer User welcome
+- update the user_mailer
+
+```
+class UserMailer < ApplicationMailer
+  default from: 'hello@creatorplatform.xyz'
+
+  # Subject can be set in your I18n file at config/locales/en.yml
+  # with the following lookup:
+  #
+  #   en.user_mailer.welcome.subject
+  #
+  def welcome(user)
+    @user = user
+    @greeting = "Welcome to the creator platform"
+
+    mail(to: "to@example.org", subject: "This is our subject")
+  end
+end
+
+```
+
+- testing to see if it worked
+- rails c
+```
+ u = User.first
+ UserMailer.welcome(u).deliver_now
+```
+
+- it opens a web browser tab with the email
+
+## Attachment downloads for end customers - CreatorPlatform.xyz - Part 33
+- HE DID A LOGIN LINK BUT NOT IN ANY VIEOS
+- rails g controller stores/orders index
+- update routes
+
+```
+  constraints DomainConstraint do
+    scope module: :stores do
+      resources :products
+      root to: 'products#index', as: 'store_root'
+      resource :checkout, as: 'store_checkout'
+      resources :orders
+    end    
+  end  
+```
+
+- go to: http://abby.lvh.me:3000/orders
+- we should see 'ye'
+- update store_base controller, to add the authenticate and current customer
+```
+module Stores
+  class StoreBaseController < ApplicationController
+    layout 'stores'
+    before_action :current_store
+
+    def current_store
+      @store ||= Store.find_by_request(request)
+    end
+
+    def authenticate_customer!
+      if current_customer.nil?
+        redirect_to new_login_path
+      end
+    end
+
+    def current_customer
+      @current_customer ||= Customer.where(
+        session_token: session[:customer],
+        token_expires_at: Time.now..
+      ).first
+    end
+  end
+end
+
+```
+
+- update orders controller
+
+```
+module Stores
+  class OrdersController < StoreBaseController
+    before_action :authenticate_customer!
+
+    def index
+      @orders = current_customer.customer_products.order(created_at: :desc)
+    end
+
+    def show
+      @order = current_customer.customer_products.find(params[:id])
+      @product = @order.product
+    end
+  end
+end
+```
+
+- in the previous video he mustve added the session token
+- rails g migration AddSessionTokenToCustomer session_token token_expires_at:datetime
+- update the migration
+
+```
+class AddSessionTokenToCustomer < ActiveRecord::Migration[7.0]
+  def change
+    add_column :customers, :session_token, :string
+    add_column :customers, :token_expires_at, :datetime
+    remove_index :customers, [:store_id, :email], name: :index_customers_on_store_id_and_email, unique: true    
+  end
+end
+
+```
+
+- he added logins controller stuff in an unaired video
+- update routes
+
+```
+  constraints DomainConstraint do
+    scope module: :stores do
+      resources :products
+      root to: 'products#index', as: 'store_root'
+      resource :checkout, as: 'store_checkout'
+      resources :logins
+      resources :orders
+    end    
+  end  
+```
+
+- rails g controller stores/logins
+- update logins controller
+
+```
+module Stores
+  class LoginsController < StoreBaseController
+    def index
+      render plain: "Check your email."
+    end
+
+    def show
+      @customer = current_store.customers.find_by(session_token: params[:id])
+      if @customer
+        session[:customer] = @customer.session_token
+      end
+
+      if params[:redirect_path]
+        redirect_to params[:redirect_path]
+      else
+        redirect_to orders_path
+      end
+    end
+
+    def new
+    end
+
+    def create
+      customer = current_store.customers.find_by(email: params[:email])
+
+      if customer
+        LoginLinkMailer.send_link(customer, current_store).deliver_later
+      end
+
+      redirect_to logins_path
+    end
+  end
+end
+```
+
+- create the stores/logins/index and new files
+- rails g mailer LoginLink send_link
+- update the file
+
+```
+class LoginLinkMailer < ApplicationMailer
+  default from: "hello@creatorplatform.xyz"
+
+  # Subject can be set in your I18n file at config/locales/en.yml
+  # with the following lookup:
+  #
+  #   en.login_link_mailer.send_link.subject
+  #
+  def send_link(customer, store)
+    @customer = customer
+    @store = store
+
+    @customer.reset_session_token!
+
+    mail to: @customer.email, subject: "Login Link"
+  end
+end
+
+```
+
+- update the login_link_mailer send file
+
+```
+<h1>Here's your login link</h1>
+
+<p>
+  <%= link_to "login here", login_url(subdomain: @store.subdomain, id: @customer.session_token) %>
+</p>
+
+```
+
+- update customer.rb
+
+```
+class Customer < ApplicationRecord
+  belongs_to :store
+  has_many :customer_products
+  has_many :products, through: :customer_products
+  has_many :attachments, through: :products
+
+  # validates :store_id, uniqueness: {scope: :email}
+  after_commit on: :create do
+    reset_session_token!
+  end
+
+  def reset_session_token!
+    update!(
+      session_token: SecureRandom.urlsafe_base64,
+      token_expires_at: 1.day.from_now
+    )
+  end  
+end
+```
+
+- add the orders/index and show files
+- refreshed the page
+- went to incoginto window abby.lvh.me:3000 store
+- purchased item
+- went to abby.lvh.me:3000/orders
+- entered the same email used for purchase (any other email doesnt work)
+- it sent me a link with letter opener
+- i clicke the link and took me to my orders page
+- i clicked show, and now we need to set up attachments
+- rails g controller Stores/Attachments
+- update the controller
+
+```
+module Stores
+  class AttachmentsController < StoreBaseController
+    before_action :authenticate_customer!
+
+    def show
+      @attachment = current_customer.attachments.find(params[:id])
+      # render json: @attachment      
+      send_data(
+        @attachment.file.download,
+        filename: @attachment.file.filename.to_s,
+      )
+    end
+  end
+end
+
+```
+
+- update routes
+
+```
+  constraints DomainConstraint do
+    scope module: :stores do
+      resources :products
+      root to: 'products#index', as: 'store_root'
+      resource :checkout, as: 'store_checkout'
+      resources :logins
+      resources :orders
+      resources :attachments
+    end    
+  end  
+```
+
+- update customer.rb
+
+```
+has_many :attachments, through: :products
+```
+
+- rails g mailer Order new_order
+- update the mailer
+- update the views/order_mailer/new
+- add the order mailer call in handle event job file
+
+```
+  def handle_checkout_session_completed(stripe_event)
+    puts "THE STRIPE EVENT IS #{stripe_event.data.object}"
+    session = Stripe::Checkout::Session.retrieve({
+      id: stripe_event.data.object.id,
+      expand: ['line_items'],
+    }, {
+      # stripe_account: stripe_event.account,
+    })
+    puts "THE SESSIONS RETRIEVED IS #{session}"
+
+    product = Product.find_by(stripe_id: session.line_items.data[0].price.product)
+    customer = Customer.find_or_initialize_by(
+      stripe_id: session.customer,
+      store: product.store
+    )
+    customer.email = session.customer_details.email
+    customer.save!
+    puts "CUSTOMER CREATED #{customer}"
+    customer_product = CustomerProduct.create!(
+      customer: customer,
+      product: product,
+      checkout_session_id: session.id,
+    )
+    puts "CUSTOMER PRODUCT CREATED #{customer_product}"
+    OrderMailer.new_order(customer_product).deliver_later
+  end
+```
+
+- open incognito window
+- go to abby.lvh.me:3000
+- buy a product
+- redirected to stripe
+- redirected back with an email sent to letter opener
+- click link
+- download attachment
+- IT WORKED
+
+### THE END

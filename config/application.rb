@@ -10,7 +10,11 @@ module AiaCjavillaCreatorPlatformStripeStoreV2
   class Application < Rails::Application
     # Initialize configuration defaults for originally generated Rails version.
     config.load_defaults 7.0
-
+    config.action_mailer.default_url_options = { host: "example.com" }
+    # config.hosts << "lvh.me"
+    config.hosts = nil
+    
+    # config.active_storage.resolve_model_to_route = :rails_storage_proxy
     # Configuration for the application, engines, and railties goes here.
     #
     # These settings can be overridden in specific environments using the files

@@ -17,13 +17,13 @@ module ApplicationHelper
       path: products_path,
     }, {
       name: 'Store',
-      path: "#"
+      path: store_path,
     }, {
       name: 'Customers',
-      path: "#"
+      path: customers_path,
     }, {
       name: 'Cardholders',
-      path: "#"
+      path: cardholders_path,
     }].map do |item|
       {
         name: item[:name],

@@ -71,6 +71,22 @@ GEM
     annotate (3.2.0)
       activerecord (>= 3.2, < 8.0)
       rake (>= 10.4, < 14.0)
+    aws-eventstream (1.2.0)
+    aws-partitions (1.684.0)
+    aws-sdk-core (3.168.4)
+      aws-eventstream (~> 1, >= 1.0.2)
+      aws-partitions (~> 1, >= 1.651.0)
+      aws-sigv4 (~> 1.5)
+      jmespath (~> 1, >= 1.6.1)
+    aws-sdk-kms (1.61.0)
+      aws-sdk-core (~> 3, >= 3.165.0)
+      aws-sigv4 (~> 1.1)
+    aws-sdk-s3 (1.117.2)
+      aws-sdk-core (~> 3, >= 3.165.0)
+      aws-sdk-kms (~> 1)
+      aws-sigv4 (~> 1.4)
+    aws-sigv4 (1.5.2)
+      aws-eventstream (~> 1, >= 1.0.2)
     bcrypt (3.1.18)
     better_errors (2.9.1)
       coderay (>= 1.0.0)
@@ -82,6 +98,7 @@ GEM
     bootsnap (1.15.0)
       msgpack (~> 1.2)
     builder (3.2.4)
+    byebug (11.1.3)
     capybara (3.38.0)
       addressable
       matrix
@@ -125,6 +142,11 @@ GEM
     jbuilder (2.11.5)
       actionview (>= 5.0.0)
       activesupport (>= 5.0.0)
+    jmespath (1.6.2)
+    launchy (2.5.2)
+      addressable (~> 2.8)
+    letter_opener (1.8.1)
+      launchy (>= 2.2, < 3)
     loofah (2.19.1)
       crass (~> 1.0.2)
       nokogiri (>= 1.5.9)
@@ -246,9 +268,11 @@ PLATFORMS
 
 DEPENDENCIES
   annotate (~> 3.2)
+  aws-sdk-s3 (~> 1.117)
   better_errors
   binding_of_caller (~> 1.0)
   bootsnap
+  byebug (~> 11.1)
   capybara
   debug
   devise (~> 4.8)
@@ -256,6 +280,7 @@ DEPENDENCIES
   image_processing (~> 1.12)
   importmap-rails
   jbuilder
+  letter_opener (~> 1.8)
   puma (~> 5.0)
   rails (~> 7.0.4)
   selenium-webdriver

@@ -21,9 +21,18 @@
 #  user_id  (user_id => users.id)
 #
 class Product < ApplicationRecord
-	belongs_to :user
+  validates :name, presence: true
+  validates :description, presence: true
+  belongs_to :user
+  has_one :store, through: :user
+  has_many :customer_products
+  has_many :customers, through: :customer_products
+  has_many :attachments, dependent: :destroy  
 	has_one_attached :photo
-
+  # has_one_attached :photo do |photo|
+  #   photo.variant :thumb, resize_to_limit: [100, 100]
+  #   photo.variant :medium, resize_to_limit: [400, 400]
+  # end
   def price
     product_data&.default_price&.unit_amount&.fdiv(100.0)
   end

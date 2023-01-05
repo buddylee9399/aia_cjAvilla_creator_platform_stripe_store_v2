@@ -82,3 +82,11 @@ gem "annotate", "~> 3.2", :group => :development
 gem "faker", "~> 3.0", :group => :development
 
 gem "image_processing", "~> 1.12"
+
+# gem "pay", "~> 6.2"
+
+gem "byebug", "~> 11.1", :group => :development
+
+gem "aws-sdk-s3", "~> 1.117"
+
+gem "letter_opener", "~> 1.8", :group => :development

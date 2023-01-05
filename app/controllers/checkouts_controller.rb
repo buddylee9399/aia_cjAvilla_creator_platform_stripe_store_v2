@@ -5,7 +5,7 @@ class CheckoutsController < ApplicationController
     account = product.user.account
 
     checkout_session = Stripe::Checkout::Session.create({
-      customer_email: "test+location_FR@example.com",
+      # customer_email: "test+location_FR@example.com",
       mode: 'payment',
       success_url: root_url,
       cancel_url: root_url,

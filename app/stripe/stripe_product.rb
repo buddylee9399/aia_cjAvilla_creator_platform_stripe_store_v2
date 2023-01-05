@@ -21,9 +21,14 @@ class StripeProduct
     stripe_product = Stripe::Product.create({
       name: product.name,
       description: product.description,
-      # images: [
-      #   product.photo.representation(:medium).processed.url,
-      # ],
+      images: [
+        # product.photo.representation(:medium).processed.url,
+        # "https://doodleipsum.com/700/flat?i=191258f28a3672a5589de78d98ac7967",
+        # Rails.application.routes.url_helpers.rails_blob_path(product.photo, only_path: true),
+        # url_for(product.photo),
+        # the .url is beacuse the direct upload true
+        product.photo.url
+      ],
       metadata: {
         user_id: product.user_id,
         product_id: product.id
@@ -42,4 +47,5 @@ class StripeProduct
       stripe_price_id: stripe_product.default_price.id,
     )
   end
+
 end
